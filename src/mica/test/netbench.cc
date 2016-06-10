@@ -31,8 +31,8 @@ struct DatagramClientConfig
     uint64_t kId;
     uint64_t kTs;
 
-    inline ArgumentStruct()
-        : kId(atomic_fetch_add(&watermark, 1ul)),
+    inline ArgumentStruct(bool actually_do_the_thing = false)
+        : kId(actually_do_the_thing ? atomic_fetch_add(&watermark, 1ul) : -1ul),
           kTs(sw.now()) {}
   } Argument;
 
@@ -135,17 +135,17 @@ int worker_proc(void* arg) {
 
     if (!use_noop) {
       if (is_get)
-        client.get(key_hash, key, key_length);
+        client.get(key_hash, key, key_length, {true});
       else {
         value_i = seq;
-        client.set(key_hash, key, key_length, value, value_length, true);
+        client.set(key_hash, key, key_length, value, value_length, true, {true});
       }
     } else {
       if (is_get)
-        client.noop_read(key_hash, key, key_length);
+        client.noop_read(key_hash, key, key_length, {true});
       else {
         value_i = seq;
-        client.noop_write(key_hash, key, key_length, value, value_length);
+        client.noop_write(key_hash, key, key_length, value, value_length, {true});
       }
     }
   }
