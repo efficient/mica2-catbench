@@ -1,9 +1,21 @@
+#include <atomic>
+#include <sys/mman.h>
+
 #include "mica/datagram/datagram_client.h"
 #include "mica/util/lcore.h"
 #include "mica/util/hash.h"
 #include "mica/util/zipf.h"
 
+using std::atomic;
+using std::atomic_fetch_add;
+
+#define ITERATIONS 30000000
+#define WARMUP     10000000
+
 typedef ::mica::alloc::HugeTLBFS_SHM Alloc;
+
+static ::mica::util::Stopwatch sw;
+static uint64_t *latencies;
 
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
   static constexpr bool kVerbose = true;
@@ -11,11 +23,26 @@ struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
 
 struct DatagramClientConfig
     : public ::mica::datagram::BasicDatagramClientConfig {
+  typedef struct ArgumentStruct {
+   private:
+    static atomic<uint64_t> watermark;
+
+   public:
+    uint64_t kId;
+    uint64_t kTs;
+
+    inline ArgumentStruct()
+        : kId(atomic_fetch_add(&watermark, 1ul)),
+          kTs(sw.now()) {}
+  } Argument;
+
   typedef ::mica::network::DPDK<DPDKConfig> Network;
   // static constexpr bool kSkipRX = true;
   // static constexpr bool kIgnoreServerPartition = true;
   // static constexpr bool kVerbose = true;
 };
+
+atomic<uint64_t> DatagramClientConfig::ArgumentStruct::watermark(0);
 
 typedef ::mica::datagram::DatagramClient<DatagramClientConfig> Client;
 
@@ -35,11 +62,12 @@ class ResponseHandler
     (void)result;
     (void)value;
     (void)value_length;
-    (void)arg;
+    latencies[arg.kId] = sw.diff_in_us(sw.now(), arg.kTs);
   }
 };
 
 struct Args {
+  size_t actual_lcore_count;
   uint16_t lcore_id;
   ::mica::util::Config* config;
   Alloc* alloc;
@@ -70,9 +98,6 @@ int worker_proc(void* arg) {
   ::mica::util::Rand op_type_rand(static_cast<uint64_t>(args->lcore_id) + 1000);
   ::mica::util::ZipfGen zg(num_items, args->zipf_theta,
                            static_cast<uint64_t>(args->lcore_id));
-  ::mica::util::Stopwatch sw;
-  sw.init_start();
-  sw.init_end();
 
   uint64_t key_i;
   uint64_t key_hash;
@@ -91,8 +116,7 @@ int worker_proc(void* arg) {
   // Ideally, packets per batch for both RX and TX should be similar.
   uint64_t response_check_interval = 20 * sw.c_1_usec();
 
-  uint64_t seq = 0;
-  while (true) {
+  for (uint64_t seq = 0; seq < ITERATIONS; seq += args->actual_lcore_count) {
     // Determine the operation type.
     uint32_t op_r = op_type_rand.next_u32();
     bool is_get = op_r <= get_threshold;
@@ -124,8 +148,6 @@ int worker_proc(void* arg) {
         client.noop_write(key_hash, key, key_length, value, value_length);
       }
     }
-
-    seq++;
   }
 
   return 0;
@@ -143,6 +165,16 @@ int main(int argc, const char* argv[]) {
 
   auto config = ::mica::util::Config::load_file("netbench.json");
 
+  latencies = reinterpret_cast<uint64_t *>(
+      mmap(nullptr, ITERATIONS * sizeof *latencies,
+      PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0));
+  if(!latencies || latencies == MAP_FAILED) {
+    perror("Allocating simply gynormous array");
+    return 1;
+  }
+  sw.init_start();
+  sw.init_end();
+
   Alloc alloc(config.get("alloc"));
 
   DatagramClientConfig::Network network(config.get("network"));
@@ -155,9 +187,11 @@ int main(int argc, const char* argv[]) {
 
   uint16_t lcore_count =
       static_cast<uint16_t>(::mica::util::lcore.lcore_count());
+  size_t actual_lcore_count = config.get("network").get("lcores").size();
 
   std::vector<Args> args(lcore_count);
   for (uint16_t lcore_id = 0; lcore_id < lcore_count; lcore_id++) {
+    args[lcore_id].actual_lcore_count = actual_lcore_count;
     args[lcore_id].lcore_id = lcore_id;
     args[lcore_id].config = &config;
     args[lcore_id].alloc = &alloc;
@@ -170,7 +204,20 @@ int main(int argc, const char* argv[]) {
     rte_eal_remote_launch(worker_proc, &args[lcore_id], lcore_id);
   }
   worker_proc(&args[0]);
+  rte_eal_mp_wait_lcore();
 
+  double ave = 0;
+  for(uint64_t each = 0; each < ITERATIONS; ++each) {
+    uint64_t lat = latencies[each];
+    printf("Completed after: %ld us\n", lat);
+    if(each >= WARMUP)
+      ave += static_cast<double>(lat);
+  }
+  ave /= ITERATIONS - WARMUP;
+  printf("Average: %f us\n", ave);
+  fflush(stdout);
+
+  munmap(latencies, ITERATIONS * sizeof *latencies);
   network.stop();
 
   return EXIT_SUCCESS;
