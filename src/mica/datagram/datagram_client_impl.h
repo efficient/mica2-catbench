@@ -2,58 +2,13 @@
 #ifndef MICA_DATAGRAM_DATAGRAM_CLIENT_IMPL_H_
 #define MICA_DATAGRAM_DATAGRAM_CLIENT_IMPL_H_
 
-#include <sys/mman.h>
-
 namespace mica {
 namespace datagram {
-template <class StaticConfig>
-DatagramClient<StaticConfig>::BatchLatencyBuffer::BatchLatencyBuffer(const ::mica::util::Stopwatch &stopwatch)
-    : stopwatch_(stopwatch),
-      sent_(reinterpret_cast<uint64_t *>(mmap(nullptr, UINT16_MAX * sizeof *sent_,
-          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0))),
-      received_(reinterpret_cast<uint64_t *>(mmap(nullptr, StaticConfig::kMaxTotalRequests * sizeof *received_,
-          PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0))),
-      recv_len_(0) {
-  assert(sent_);
-  assert(sent_ != MAP_FAILED);
-  assert(received_);
-  assert(received_ != MAP_FAILED);
-}
-
-template <class StaticConfig>
-DatagramClient<StaticConfig>::BatchLatencyBuffer::~BatchLatencyBuffer() {
-  munmap(sent_, UINT16_MAX * sizeof *sent_);
-  munmap(received_, StaticConfig::kMaxTotalRequests * sizeof *received_);
-}
-
-template <class StaticConfig>
-void DatagramClient<StaticConfig>::BatchLatencyBuffer::send(
-    RequestDescriptor descr, uint64_t start_ts) {
-  assert(!sent_[descr]);
-  sent_[descr] = start_ts;
-}
-
-template <class StaticConfig>
-void DatagramClient<StaticConfig>::BatchLatencyBuffer::receive(
-    RequestDescriptor descr, uint64_t stop_ts) {
-  // TODO: Need to make atomic?
-  uint64_t start_ts = sent_[descr];
-  assert(start_ts);
-  sent_[descr] = 0;
-  received_[recv_len_++] = stopwatch_.diff_in_us(stop_ts, start_ts);
-}
-
-template <class StaticConfig>
-const uint64_t *DatagramClient<StaticConfig>::BatchLatencyBuffer::received(size_t &len) const {
-  len = recv_len_;
-  return received_;
-}
-
 template <class StaticConfig>
 DatagramClient<StaticConfig>::DatagramClient(const ::mica::util::Config& config,
                                              Network* network,
                                              DirectoryClient* dir_client)
-    : latencies_(stopwatch_), config_(config), network_(network), dir_client_(dir_client) {
+    : config_(config), network_(network), dir_client_(dir_client) {
   assert(StaticConfig::kMaxLCoreCount >= ::mica::util::lcore.lcore_count());
 
   stopwatch_.init_start();
@@ -559,9 +514,6 @@ void DatagramClient<StaticConfig>::handle_response(ResponseHandler& rh) {
           uint16_t epoch = opaque & ((1 << 16) - 1);
           if (thread_state.rd_items[rd].epoch != epoch) continue;
 
-          // Record the round trip time.
-          latencies_.receive(rd, stopwatch_.now());
-
           // Call the handler.
           auto result = r.get_result();
           rh.handle(rd, result, r.get_value(), r.get_value_length(),
@@ -619,11 +571,6 @@ void DatagramClient<StaticConfig>::handle_response(ResponseHandler& rh) {
   }
 
   worker_stats_[lcore_id].alive = 1;
-}
-
-template <class StaticConfig>
-const uint64_t *DatagramClient<StaticConfig>::latencies(size_t &len) const {
-  return latencies_.received(len);
 }
 
 template <class StaticConfig>
