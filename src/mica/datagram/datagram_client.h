@@ -38,6 +38,9 @@ struct BasicDatagramClientConfig {
   // The request batching timeout (accumulation time) in microseconds.
   // static constexpr uint16_t kRequestBatchTimeout = 1;
 
+  // The maximum number of requests the client is allowed to send.
+  static constexpr uint64_t kMaxTotalRequests = INT32_MAX; // 16 GB free RAM
+
   // The maximum number of outstanding requests.
   static constexpr uint32_t kMaxOutstandingRequestCount = 1024;
 
@@ -125,6 +128,8 @@ class DatagramClient {
   template <class ResponseHandler>
   void handle_response(ResponseHandler& rh);
 
+  const uint64_t *latencies(size_t &len) const;
+
   // TODO
   // void flush();
 
@@ -155,6 +160,26 @@ class DatagramClient {
                          const Argument& arg = Argument());
 
  private:
+  class BatchLatencyBuffer {
+   private:
+    const ::mica::util::Stopwatch &stopwatch_;
+    uint64_t *sent_;
+    uint64_t *received_;
+    size_t recv_len_;
+
+   public:
+    BatchLatencyBuffer(const ::mica::util::Stopwatch &stopwatch);
+    ~BatchLatencyBuffer();
+
+    BatchLatencyBuffer(const BatchLatencyBuffer &) = delete;
+    BatchLatencyBuffer &operator=(const BatchLatencyBuffer &) = delete;
+
+    void send(RequestDescriptor descr, uint64_t start_ts);
+    void receive(RequestDescriptor descr, uint64_t stop_ts);
+
+    const uint64_t *received(size_t &len) const;
+  } latencies_;
+
   ::mica::util::Config config_;
   Network* network_;
   DirectoryClient* dir_client_;
