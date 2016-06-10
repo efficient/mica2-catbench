@@ -16,6 +16,7 @@ typedef ::mica::alloc::HugeTLBFS_SHM Alloc;
 
 static ::mica::util::Stopwatch sw;
 static uint64_t *latencies;
+static atomic<uint64_t> num_latencies;
 
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
   static constexpr bool kVerbose = true;
@@ -63,6 +64,7 @@ class ResponseHandler
     (void)value;
     (void)value_length;
     latencies[arg.kId] = sw.diff_in_us(sw.now(), arg.kTs);
+    atomic_fetch_add(&num_latencies, 1ul);
   }
 };
 
@@ -149,6 +151,9 @@ int worker_proc(void* arg) {
       }
     }
   }
+
+  while (num_latencies < ITERATIONS)
+    client.handle_response(rh);
 
   return 0;
 }
