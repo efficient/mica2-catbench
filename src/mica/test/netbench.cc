@@ -5,17 +5,18 @@
 #include "mica/util/lcore.h"
 #include "mica/util/hash.h"
 #include "mica/util/zipf.h"
+#include "mica/util/rate_limiter.h"
 
 using std::atomic;
 using std::atomic_fetch_add;
 
 #define ITERATIONS 30000000
-#define WARMUP     10000000
+#define WARMUP 10000000
 
 typedef ::mica::alloc::HugeTLBFS_SHM Alloc;
 
 static ::mica::util::Stopwatch sw;
-static uint64_t *latencies;
+static uint64_t* latencies;
 static atomic<uint64_t> num_latencies;
 
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
@@ -74,7 +75,11 @@ struct Args {
   ::mica::util::Config* config;
   Alloc* alloc;
   Client* client;
+
+  uint64_t num_items;
+  double get_ratio;
   double zipf_theta;
+  double tput_limit;
 } __attribute__((aligned(128)));
 
 int worker_proc(void* arg) {
@@ -90,16 +95,15 @@ int worker_proc(void* arg) {
 
   ResponseHandler rh;
 
-  size_t num_items = 192 * 1048576;
-
-  // double get_ratio = 0.95;
-  double get_ratio = 0.50;
-
-  uint32_t get_threshold = (uint32_t)(get_ratio * (double)((uint32_t)-1));
+  uint32_t get_threshold = (uint32_t)(args->get_ratio * (double)((uint32_t)-1));
 
   ::mica::util::Rand op_type_rand(static_cast<uint64_t>(args->lcore_id) + 1000);
-  ::mica::util::ZipfGen zg(num_items, args->zipf_theta,
+  ::mica::util::ZipfGen zg(args->num_items, args->zipf_theta,
                            static_cast<uint64_t>(args->lcore_id));
+  bool limit_tput = args->tput_limit > 0.;
+  ::mica::util::RateLimiter rate_limiter(
+      sw, 0., 1000.,
+      args->tput_limit * 1000000. / static_cast<double>(sw.c_1_sec()));
 
   uint64_t key_i;
   uint64_t key_hash;
@@ -130,9 +134,11 @@ int worker_proc(void* arg) {
     uint64_t now = sw.now();
     while (!client.can_request(key_hash) ||
            sw.diff_in_cycles(now, last_handle_response_time) >=
-               response_check_interval) {
+               response_check_interval ||
+           (limit_tput && !rate_limiter.try_remove_tokens(1.))) {
       last_handle_response_time = now;
       client.handle_response(rh);
+      now = sw.now();
     }
 
     if (!use_noop) {
@@ -140,40 +146,49 @@ int worker_proc(void* arg) {
         client.get(key_hash, key, key_length, {true});
       else {
         value_i = seq;
-        client.set(key_hash, key, key_length, value, value_length, true, {true});
+        client.set(key_hash, key, key_length, value, value_length, true,
+                   {true});
       }
     } else {
       if (is_get)
         client.noop_read(key_hash, key, key_length, {true});
       else {
         value_i = seq;
-        client.noop_write(key_hash, key, key_length, value, value_length, {true});
+        client.noop_write(key_hash, key, key_length, value, value_length,
+                          {true});
       }
     }
   }
 
-  while (num_latencies < ITERATIONS)
-    client.handle_response(rh);
+  while (num_latencies < ITERATIONS) client.handle_response(rh);
 
   return 0;
 }
 
 int main(int argc, const char* argv[]) {
-  if (argc != 2) {
-    printf("%s ZIPF-THETA\n", argv[0]);
+  if (argc != 5) {
+    printf("%s NUM-ITEMS GET-RATIO ZIPF-THETA TPUT-LIMIT(M req/sec)\n",
+           argv[0]);
     return EXIT_FAILURE;
   }
 
-  double zipf_theta = atof(argv[1]);
+  uint64_t num_items = static_cast<uint64_t>(atol(argv[1]));
+  double get_ratio = atof(argv[2]);
+  double zipf_theta = atof(argv[3]);
+  double tput_limit = atof(argv[4]);
+  printf("num_items=%" PRIu64 "\n", num_items);
+  printf("get_ratio=%lf\n", get_ratio);
+  printf("zipf_theta=%lf\n", zipf_theta);
+  printf("tput_limit=%lf\n", tput_limit);
 
   ::mica::util::lcore.pin_thread(0);
 
   auto config = ::mica::util::Config::load_file("netbench.json");
 
-  latencies = reinterpret_cast<uint64_t *>(
-      mmap(nullptr, ITERATIONS * sizeof *latencies,
-      PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0));
-  if(!latencies || latencies == MAP_FAILED) {
+  latencies = reinterpret_cast<uint64_t*>(
+      mmap(nullptr, ITERATIONS * sizeof *latencies, PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0));
+  if (!latencies || latencies == MAP_FAILED) {
     perror("Allocating simply gynormous array");
     return 1;
   }
@@ -201,7 +216,11 @@ int main(int argc, const char* argv[]) {
     args[lcore_id].config = &config;
     args[lcore_id].alloc = &alloc;
     args[lcore_id].client = &client;
+    args[lcore_id].num_items = num_items;
+    args[lcore_id].get_ratio = get_ratio;
     args[lcore_id].zipf_theta = zipf_theta;
+    args[lcore_id].tput_limit =
+        tput_limit / static_cast<double>(actual_lcore_count);
   }
 
   for (uint16_t lcore_id = 1; lcore_id < lcore_count; lcore_id++) {
@@ -212,11 +231,10 @@ int main(int argc, const char* argv[]) {
   rte_eal_mp_wait_lcore();
 
   double ave = 0;
-  for(uint64_t each = 0; each < ITERATIONS; ++each) {
+  for (uint64_t each = 0; each < ITERATIONS; ++each) {
     uint64_t lat = latencies[each];
     printf("Completed after: %ld us\n", lat);
-    if(each >= WARMUP)
-      ave += static_cast<double>(lat);
+    if (each >= WARMUP) ave += static_cast<double>(lat);
   }
   ave /= ITERATIONS - WARMUP;
   printf("Average: %f us\n", ave);
