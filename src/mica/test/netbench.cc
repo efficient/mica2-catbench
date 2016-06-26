@@ -170,7 +170,7 @@ int main(int argc, const char* argv[]) {
   FILE* latency_out_file = stdout;
   size_t iterations = 30000000;
   size_t warmup = 10000000;
-  size_t subsampling = 1;
+  size_t subsample_factor = 1;
 
   int c;
   opterr = 0;
@@ -189,7 +189,7 @@ int main(int argc, const char* argv[]) {
         warmup = static_cast<size_t>(atol(optarg));
         break;
       case 's':
-        subsampling = static_cast<size_t>(atol(optarg));
+        subsample_factor = static_cast<size_t>(atol(optarg));
         break;
       case '?':
         if (isprint(optopt))
@@ -202,7 +202,8 @@ int main(int argc, const char* argv[]) {
 
   if (argc - optind != 4) {
     printf(
-        "%s [-o LATENCY-OUT-FILENAME] NUM-ITEMS GET-RATIO ZIPF-THETA "
+        "%s [-o LATENCY-OUT-FILENAME] [-n ITERATIONS] [-w WARMUP] [-s "
+        "SUBSAMPLE-FACTOR] NUM-ITEMS GET-RATIO ZIPF-THETA "
         "TPUT-LIMIT(M req/sec)\n",
         argv[0]);
     return EXIT_FAILURE;
@@ -267,16 +268,16 @@ int main(int argc, const char* argv[]) {
   worker_proc(&args[0]);
   rte_eal_mp_wait_lcore();
 
-  size_t subsample_c = subsampling;
+  size_t subsample_c = subsample_factor;
   size_t subsample_i = 0;
   ::mica::util::Rand subsample_rand(sw.now() % (uint64_t(1) << 32));
   double ave = 0;
-  for (uint64_t each = 0; each < iterations / subsampling * subsampling;
-       ++each) {
+  for (uint64_t each = 0;
+       each < iterations / subsample_factor * subsample_factor; ++each) {
     uint64_t lat = latencies[each];
-    if (subsample_c == subsampling) {
+    if (subsample_c == subsample_factor) {
       subsample_c = 0;
-      subsample_i = each + subsample_rand.next_u32() % subsampling;
+      subsample_i = each + subsample_rand.next_u32() % subsample_factor;
     }
     if (each == subsample_i)
       fprintf(latency_out_file, "Completed after: %ld us\n", lat);
