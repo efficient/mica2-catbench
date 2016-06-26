@@ -1,5 +1,6 @@
 #include <atomic>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "mica/datagram/datagram_client.h"
 #include "mica/util/lcore.h"
@@ -9,9 +10,6 @@
 
 using std::atomic;
 using std::atomic_fetch_add;
-
-#define ITERATIONS 30000000
-#define WARMUP 10000000
 
 typedef ::mica::alloc::HugeTLBFS_SHM Alloc;
 
@@ -80,12 +78,15 @@ struct Args {
   double get_ratio;
   double zipf_theta;
   double tput_limit;
+
+  size_t iterations;
 } __attribute__((aligned(128)));
 
 int worker_proc(void* arg) {
   auto args = reinterpret_cast<Args*>(arg);
 
   Client& client = *args->client;
+  size_t iterations = args->iterations;
 
   ::mica::util::lcore.pin_thread(args->lcore_id);
 
@@ -122,7 +123,7 @@ int worker_proc(void* arg) {
   // Ideally, packets per batch for both RX and TX should be similar.
   uint64_t response_check_interval = 20 * sw.c_1_usec();
 
-  for (uint64_t seq = 0; seq < ITERATIONS; seq += args->actual_lcore_count) {
+  for (uint64_t seq = 0; seq < iterations; seq += args->actual_lcore_count) {
     // Determine the operation type.
     uint32_t op_r = op_type_rand.next_u32();
     bool is_get = op_r <= get_threshold;
@@ -160,22 +161,57 @@ int worker_proc(void* arg) {
     }
   }
 
-  while (num_latencies < ITERATIONS) client.handle_response(rh);
+  while (num_latencies < iterations) client.handle_response(rh);
 
   return 0;
 }
 
 int main(int argc, const char* argv[]) {
-  if (argc != 5) {
-    printf("%s NUM-ITEMS GET-RATIO ZIPF-THETA TPUT-LIMIT(M req/sec)\n",
-           argv[0]);
+  FILE* latency_out_file = stdout;
+  size_t iterations = 30000000;
+  size_t warmup = 10000000;
+  size_t subsampling = 1;
+
+  int c;
+  opterr = 0;
+  while ((c = getopt(argc, const_cast<char**>(argv), "o:n:w:s:")) != -1) {
+    switch (c) {
+      case 'o':
+        if (strcmp(optarg, "-") == 0)
+          latency_out_file = stdout;
+        else
+          latency_out_file = fopen(optarg, "w");
+        break;
+      case 'n':
+        iterations = static_cast<size_t>(atol(optarg));
+        break;
+      case 'w':
+        warmup = static_cast<size_t>(atol(optarg));
+        break;
+      case 's':
+        subsampling = static_cast<size_t>(atol(optarg));
+        break;
+      case '?':
+        if (isprint(optopt))
+          fprintf(stderr, "incomplete option -%c\n", optopt);
+        else
+          fprintf(stderr, "error parsing arguments\n");
+        return EXIT_FAILURE;
+    }
+  }
+
+  if (argc - optind != 4) {
+    printf(
+        "%s [-o LATENCY-OUT-FILENAME] NUM-ITEMS GET-RATIO ZIPF-THETA "
+        "TPUT-LIMIT(M req/sec)\n",
+        argv[0]);
     return EXIT_FAILURE;
   }
 
-  uint64_t num_items = static_cast<uint64_t>(atol(argv[1]));
-  double get_ratio = atof(argv[2]);
-  double zipf_theta = atof(argv[3]);
-  double tput_limit = atof(argv[4]);
+  uint64_t num_items = static_cast<uint64_t>(atol(argv[optind + 0]));
+  double get_ratio = atof(argv[optind + 1]);
+  double zipf_theta = atof(argv[optind + 2]);
+  double tput_limit = atof(argv[optind + 3]);
   printf("num_items=%" PRIu64 "\n", num_items);
   printf("get_ratio=%lf\n", get_ratio);
   printf("zipf_theta=%lf\n", zipf_theta);
@@ -186,7 +222,7 @@ int main(int argc, const char* argv[]) {
   auto config = ::mica::util::Config::load_file("netbench.json");
 
   latencies = reinterpret_cast<uint64_t*>(
-      mmap(nullptr, ITERATIONS * sizeof *latencies, PROT_READ | PROT_WRITE,
+      mmap(nullptr, iterations * sizeof(*latencies), PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0));
   if (!latencies || latencies == MAP_FAILED) {
     perror("Allocating simply gynormous array");
@@ -221,6 +257,7 @@ int main(int argc, const char* argv[]) {
     args[lcore_id].zipf_theta = zipf_theta;
     args[lcore_id].tput_limit =
         tput_limit / static_cast<double>(actual_lcore_count);
+    args[lcore_id].iterations = iterations;
   }
 
   for (uint16_t lcore_id = 1; lcore_id < lcore_count; lcore_id++) {
@@ -230,18 +267,30 @@ int main(int argc, const char* argv[]) {
   worker_proc(&args[0]);
   rte_eal_mp_wait_lcore();
 
+  size_t subsample_c = subsampling;
+  size_t subsample_i = 0;
+  ::mica::util::Rand subsample_rand(sw.now() % (uint64_t(1) << 32));
   double ave = 0;
-  for (uint64_t each = 0; each < ITERATIONS; ++each) {
+  for (uint64_t each = 0; each < iterations / subsampling * subsampling;
+       ++each) {
     uint64_t lat = latencies[each];
-    printf("Completed after: %ld us\n", lat);
-    if (each >= WARMUP) ave += static_cast<double>(lat);
+    if (subsample_c == subsampling) {
+      subsample_c = 0;
+      subsample_i = each + subsample_rand.next_u32() % subsampling;
+    }
+    if (each == subsample_i)
+      fprintf(latency_out_file, "Completed after: %ld us\n", lat);
+    subsample_c++;
+    if (each >= warmup) ave += static_cast<double>(lat);
   }
-  ave /= ITERATIONS - WARMUP;
-  printf("Average: %f us\n", ave);
+  ave /= static_cast<double>(iterations - warmup);
+  fprintf(latency_out_file, "Average: %f us\n", ave);
   fflush(stdout);
 
-  munmap(latencies, ITERATIONS * sizeof *latencies);
+  munmap(latencies, iterations * sizeof(*latencies));
   network.stop();
+
+  fclose(latency_out_file);
 
   return EXIT_SUCCESS;
 }
