@@ -6,6 +6,7 @@
 #include "mica/util/lcore.h"
 #include "mica/util/hash.h"
 #include "mica/util/zipf.h"
+#include "mica/util/latency.h"
 #include "mica/util/rate_limiter.h"
 
 using std::atomic;
@@ -271,7 +272,7 @@ int main(int argc, const char* argv[]) {
   size_t subsample_c = subsample_factor;
   size_t subsample_i = 0;
   ::mica::util::Rand subsample_rand(sw.now() % (uint64_t(1) << 32));
-  double ave = 0;
+  ::mica::util::Latency lt;
   for (uint64_t each = 0;
        each < iterations / subsample_factor * subsample_factor; ++each) {
     uint64_t lat = latencies[each];
@@ -282,10 +283,16 @@ int main(int argc, const char* argv[]) {
     if (each == subsample_i)
       fprintf(latency_out_file, "Completed after: %ld us\n", lat);
     subsample_c++;
-    if (each >= warmup) ave += static_cast<double>(lat);
+    if (each >= warmup) lt.update(lat);
   }
-  ave /= static_cast<double>(iterations - warmup);
-  fprintf(latency_out_file, "Average: %f us\n", ave);
+  fprintf(latency_out_file, "Average: %.2lf us\n", lt.avg_f());
+  fprintf(latency_out_file, "Minimum: %" PRIu64 " us\n", lt.min());
+  fprintf(latency_out_file, "Maximum: %" PRIu64 " us\n", lt.max());
+  fprintf(latency_out_file, "50-th: %" PRIu64 " us\n", lt.perc(0.5));
+  fprintf(latency_out_file, "90-th: %" PRIu64 " us\n", lt.perc(0.9));
+  fprintf(latency_out_file, "95-th: %" PRIu64 " us\n", lt.perc(0.95));
+  fprintf(latency_out_file, "99-th: %" PRIu64 " us\n", lt.perc(0.99));
+  fprintf(latency_out_file, "99.9-th: %" PRIu64 " us\n", lt.perc(0.999));
   fflush(stdout);
 
   munmap(latencies, iterations * sizeof(*latencies));
