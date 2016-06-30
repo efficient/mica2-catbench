@@ -285,20 +285,21 @@ int main(int argc, const char* argv[]) {
     subsample_c++;
     if (each >= warmup) lt.update(lat);
   }
-  fprintf(latency_out_file, "Average: %.2lf us\n", lt.avg_f());
-  fprintf(latency_out_file, "Minimum: %" PRIu64 " us\n", lt.min());
-  fprintf(latency_out_file, "Maximum: %" PRIu64 " us\n", lt.max());
-  fprintf(latency_out_file, "50-th: %" PRIu64 " us\n", lt.perc(0.5));
-  fprintf(latency_out_file, "90-th: %" PRIu64 " us\n", lt.perc(0.9));
-  fprintf(latency_out_file, "95-th: %" PRIu64 " us\n", lt.perc(0.95));
-  fprintf(latency_out_file, "99-th: %" PRIu64 " us\n", lt.perc(0.99));
-  fprintf(latency_out_file, "99.9-th: %" PRIu64 " us\n", lt.perc(0.999));
+  if (latency_out_file != stdout && latency_out_file != stderr)
+    fclose(latency_out_file);
+
+  printf("Average: %.2lf us\n", lt.avg_f());
+  printf("Minimum: %" PRIu64 " us\n", lt.min());
+  printf("Maximum: %" PRIu64 " us\n", lt.max());
+  printf("50-th: %" PRIu64 " us\n", lt.perc(0.5));
+  printf("90-th: %" PRIu64 " us\n", lt.perc(0.9));
+  printf("95-th: %" PRIu64 " us\n", lt.perc(0.95));
+  printf("99-th: %" PRIu64 " us\n", lt.perc(0.99));
+  printf("99.9-th: %" PRIu64 " us\n", lt.perc(0.999));
   fflush(stdout);
 
   munmap(latencies, iterations * sizeof(*latencies));
   network.stop();
-
-  fclose(latency_out_file);
 
   return EXIT_SUCCESS;
 }
