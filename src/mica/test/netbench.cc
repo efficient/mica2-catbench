@@ -78,6 +78,7 @@ struct Args {
   uint64_t num_items;
   double get_ratio;
   double zipf_theta;
+  int tput_limit_mode;
   double tput_limit;
 
   size_t iterations;
@@ -102,10 +103,16 @@ int worker_proc(void* arg) {
   ::mica::util::Rand op_type_rand(static_cast<uint64_t>(args->lcore_id) + 1000);
   ::mica::util::ZipfGen zg(args->num_items, args->zipf_theta,
                            static_cast<uint64_t>(args->lcore_id));
+
   bool limit_tput = args->tput_limit > 0.;
-  ::mica::util::RateLimiter rate_limiter(
+  int tput_limit_mode = args->tput_limit_mode;
+  ::mica::util::RegularRateLimiter reg_rate_limiter(
       sw, 0., 1000.,
       args->tput_limit * 1000000. / static_cast<double>(sw.c_1_sec()));
+  ::mica::util::ExponentialRateLimiter exp_rate_limiter(
+      sw, 0., 1000.,
+      args->tput_limit * 1000000. / static_cast<double>(sw.c_1_sec()),
+      static_cast<uint64_t>(args->lcore_id) + 2000);
 
   uint64_t key_i;
   uint64_t key_hash;
@@ -134,10 +141,14 @@ int worker_proc(void* arg) {
     key_hash = hash(key, key_length);
 
     uint64_t now = sw.now();
-    while (!client.can_request(key_hash) ||
-           sw.diff_in_cycles(now, last_handle_response_time) >=
-               response_check_interval ||
-           (limit_tput && !rate_limiter.try_remove_tokens(1.))) {
+    while (
+        !client.can_request(key_hash) ||
+        sw.diff_in_cycles(now, last_handle_response_time) >=
+            response_check_interval ||
+        (limit_tput &&
+         ((tput_limit_mode == 0 && !reg_rate_limiter.try_remove_tokens(1.)) ||
+          (/*tput_limit_mode == 1 &&*/ !exp_rate_limiter.try_remove_tokens(
+              1.))))) {
       last_handle_response_time = now;
       client.handle_response(rh);
       now = sw.now();
@@ -172,10 +183,11 @@ int main(int argc, const char* argv[]) {
   size_t iterations = 30000000;
   size_t warmup = 10000000;
   size_t subsample_factor = 1;
+  int tput_limit_mode = 0;
 
   int c;
   opterr = 0;
-  while ((c = getopt(argc, const_cast<char**>(argv), "o:n:w:s:")) != -1) {
+  while ((c = getopt(argc, const_cast<char**>(argv), "o:n:w:s:p")) != -1) {
     switch (c) {
       case 'o':
         if (strcmp(optarg, "-") == 0)
@@ -192,6 +204,9 @@ int main(int argc, const char* argv[]) {
       case 's':
         subsample_factor = static_cast<size_t>(atol(optarg));
         break;
+      case 'p':
+        tput_limit_mode = 1;
+        break;
       case '?':
         if (isprint(optopt))
           fprintf(stderr, "incomplete option -%c\n", optopt);
@@ -204,7 +219,7 @@ int main(int argc, const char* argv[]) {
   if (argc - optind != 4) {
     printf(
         "%s [-o LATENCY-OUT-FILENAME] [-n ITERATIONS] [-w WARMUP] [-s "
-        "SUBSAMPLE-FACTOR] NUM-ITEMS GET-RATIO ZIPF-THETA "
+        "SUBSAMPLE-FACTOR] [-p] NUM-ITEMS GET-RATIO ZIPF-THETA "
         "TPUT-LIMIT(M req/sec)\n",
         argv[0]);
     return EXIT_FAILURE;
@@ -218,6 +233,8 @@ int main(int argc, const char* argv[]) {
   printf("get_ratio=%lf\n", get_ratio);
   printf("zipf_theta=%lf\n", zipf_theta);
   printf("tput_limit=%lf\n", tput_limit);
+  printf("tput_limit_mode=%d (%s)\n", tput_limit_mode,
+         tput_limit_mode == 0 ? "regular" : "poisson");
   printf("iterations=%zu\n", iterations);
   printf("warmup=%zu\n", warmup);
   printf("subsample_factor=%zu\n", subsample_factor);
@@ -260,6 +277,7 @@ int main(int argc, const char* argv[]) {
     args[lcore_id].num_items = num_items;
     args[lcore_id].get_ratio = get_ratio;
     args[lcore_id].zipf_theta = zipf_theta;
+    args[lcore_id].tput_limit_mode = tput_limit_mode;
     args[lcore_id].tput_limit =
         tput_limit / static_cast<double>(actual_lcore_count);
     args[lcore_id].iterations = iterations;
