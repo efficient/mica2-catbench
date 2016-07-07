@@ -218,6 +218,9 @@ int main(int argc, const char* argv[]) {
   printf("get_ratio=%lf\n", get_ratio);
   printf("zipf_theta=%lf\n", zipf_theta);
   printf("tput_limit=%lf\n", tput_limit);
+  printf("iterations=%zu\n", iterations);
+  printf("warmup=%zu\n", warmup);
+  printf("subsample_factor=%zu\n", subsample_factor);
 
   ::mica::util::lcore.pin_thread(0);
 
