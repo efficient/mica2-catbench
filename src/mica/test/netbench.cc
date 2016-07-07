@@ -147,8 +147,7 @@ int worker_proc(void* arg) {
             response_check_interval ||
         (limit_tput &&
          ((tput_limit_mode == 0 && !reg_rate_limiter.try_remove_tokens(1.)) ||
-          (/*tput_limit_mode == 1 &&*/ !exp_rate_limiter.try_remove_tokens(
-              1.))))) {
+          (tput_limit_mode == 1 && !exp_rate_limiter.try_remove_tokens(1.))))) {
       last_handle_response_time = now;
       client.handle_response(rh);
       now = sw.now();
