@@ -212,7 +212,8 @@ int controller_proc(void* arg) {
 
 int main(int argc, const char* argv[]) {
   FILE* latency_out_file = stdout;
-  size_t max_iterations = 30000000;
+  bool out_to_dev_null = false;
+  size_t max_iterations = 100000000;  // 100 Mi
   size_t subsample_factor = 1;
   int tput_limit_mode = 0;
 
@@ -223,8 +224,12 @@ int main(int argc, const char* argv[]) {
       case 'o':
         if (strcmp(optarg, "-") == 0)
           latency_out_file = stdout;
-        else
-          latency_out_file = fopen(optarg, "w");
+        else {
+          if (strcmp(optarg, "/dev/null") == 0)
+            out_to_dev_null = true;
+          else
+            latency_out_file = fopen(optarg, "w");
+        }
         break;
       case 'n':
         max_iterations = static_cast<size_t>(atol(optarg));
@@ -329,9 +334,23 @@ int main(int argc, const char* argv[]) {
   ctrl_thd.join();
 
   uint64_t iteration_start_nv = iteration_start;
-  auto iterations =
-      DatagramClientConfig::ArgumentStruct::get_current_watermark() -
-      iteration_start_nv;
+  auto iteration_end_nv =
+      DatagramClientConfig::ArgumentStruct::get_current_watermark();
+
+  printf("issued:   %" PRIu64 " requests [%" PRIu64 ", %" PRIu64 ")\n",
+         iteration_end_nv - iteration_start_nv, iteration_start_nv,
+         iteration_end_nv);
+
+  uint64_t iterations;
+  if (iteration_end_nv - iteration_start_nv <= max_iterations)
+    iterations = iteration_end_nv - iteration_start_nv;
+  else {
+    iteration_start_nv = iteration_end_nv - max_iterations;
+    iterations = max_iterations;
+  }
+  printf("analyzed: %" PRIu64 " requests [%" PRIu64 ", %" PRIu64 ")\n",
+         iteration_end_nv - iteration_start_nv, iteration_start_nv,
+         iteration_end_nv);
 
   size_t subsample_c = subsample_factor;
   size_t subsample_i = 0;
@@ -344,12 +363,13 @@ int main(int argc, const char* argv[]) {
       subsample_c = 0;
       subsample_i = each + subsample_rand.next_u32() % subsample_factor;
     }
-    if (each == subsample_i)
+    if (!out_to_dev_null && each == subsample_i)
       fprintf(latency_out_file, "Completed after: %ld us\n", lat);
     subsample_c++;
     lt.update(lat);
   }
-  if (latency_out_file != stdout && latency_out_file != stderr)
+  if (!out_to_dev_null && latency_out_file != stdout &&
+      latency_out_file != stderr)
     fclose(latency_out_file);
 
   printf("Average: %.2lf us\n", lt.avg_f());
