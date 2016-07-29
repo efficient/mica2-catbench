@@ -18,6 +18,9 @@ static ::mica::util::Stopwatch sw;
 static uint64_t* latencies;
 static atomic<uint64_t> num_latencies;
 
+static atomic<uint64_t> iteration_start;
+static atomic<bool> stopping;
+
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
   static constexpr bool kVerbose = true;
 };
@@ -35,6 +38,8 @@ struct DatagramClientConfig
     inline ArgumentStruct(bool actually_do_the_thing = false)
         : kId(actually_do_the_thing ? atomic_fetch_add(&watermark, 1ul) : -1ul),
           kTs(sw.now()) {}
+
+    static uint64_t get_current_watermark() { return watermark; }
   } Argument;
 
   typedef ::mica::network::DPDK<DPDKConfig> Network;
@@ -57,15 +62,23 @@ static uint64_t hash(const T* key, size_t key_length) {
 class ResponseHandler
     : public ::mica::datagram::ResponseHandlerInterface<Client> {
  public:
+  ResponseHandler(uint64_t max_iterations, uint64_t* pending)
+      : max_iterations_(max_iterations), pending_(pending) {}
+
   void handle(Client::RequestDescriptor rd, Result result, const char* value,
               size_t value_length, const Argument& arg) {
     (void)rd;
     (void)result;
     (void)value;
     (void)value_length;
-    latencies[arg.kId] = sw.diff_in_us(sw.now(), arg.kTs);
+    latencies[arg.kId % max_iterations_] = sw.diff_in_us(sw.now(), arg.kTs);
     atomic_fetch_add(&num_latencies, 1ul);
+    (*pending_)--;
   }
+
+ private:
+  uint64_t max_iterations_;
+  uint64_t* pending_;
 };
 
 struct Args {
@@ -81,14 +94,14 @@ struct Args {
   int tput_limit_mode;
   double tput_limit;
 
-  size_t iterations;
+  size_t max_iterations;
 } __attribute__((aligned(128)));
 
 int worker_proc(void* arg) {
   auto args = reinterpret_cast<Args*>(arg);
 
   Client& client = *args->client;
-  size_t iterations = args->iterations;
+  size_t max_iterations = args->max_iterations;
 
   ::mica::util::lcore.pin_thread(args->lcore_id);
 
@@ -96,7 +109,8 @@ int worker_proc(void* arg) {
 
   client.probe_reachability();
 
-  ResponseHandler rh;
+  uint64_t pending = 0;
+  ResponseHandler rh(max_iterations, &pending);
 
   uint32_t get_threshold = (uint32_t)(args->get_ratio * (double)((uint32_t)-1));
 
@@ -131,7 +145,7 @@ int worker_proc(void* arg) {
   // Ideally, packets per batch for both RX and TX should be similar.
   uint64_t response_check_interval = 20 * sw.c_1_usec();
 
-  for (uint64_t seq = 0; seq < iterations; seq += args->actual_lcore_count) {
+  for (uint64_t seq = 0; !stopping; seq += args->actual_lcore_count) {
     // Determine the operation type.
     uint32_t op_r = op_type_rand.next_u32();
     bool is_get = op_r <= get_threshold;
@@ -170,23 +184,41 @@ int worker_proc(void* arg) {
                           {true});
       }
     }
+    pending++;
   }
 
-  while (num_latencies < iterations) client.handle_response(rh);
+  while (pending != 0) client.handle_response(rh);
 
+  return 0;
+}
+
+int controller_proc(void* arg) {
+  (void)arg;
+
+  char buf[1024];
+  while (true) {
+    if (fgets(buf, sizeof(buf), stdin) == nullptr) break;
+
+    if (strcmp(buf, "r\n") == 0)
+      iteration_start =
+          DatagramClientConfig::ArgumentStruct::get_current_watermark();
+    else if (strcmp(buf, "s\n") == 0) {
+      stopping = true;
+      break;
+    }
+  }
   return 0;
 }
 
 int main(int argc, const char* argv[]) {
   FILE* latency_out_file = stdout;
-  size_t iterations = 30000000;
-  size_t warmup = 10000000;
+  size_t max_iterations = 30000000;
   size_t subsample_factor = 1;
   int tput_limit_mode = 0;
 
   int c;
   opterr = 0;
-  while ((c = getopt(argc, const_cast<char**>(argv), "o:n:w:s:p")) != -1) {
+  while ((c = getopt(argc, const_cast<char**>(argv), "o:n:s:p")) != -1) {
     switch (c) {
       case 'o':
         if (strcmp(optarg, "-") == 0)
@@ -195,10 +227,7 @@ int main(int argc, const char* argv[]) {
           latency_out_file = fopen(optarg, "w");
         break;
       case 'n':
-        iterations = static_cast<size_t>(atol(optarg));
-        break;
-      case 'w':
-        warmup = static_cast<size_t>(atol(optarg));
+        max_iterations = static_cast<size_t>(atol(optarg));
         break;
       case 's':
         subsample_factor = static_cast<size_t>(atol(optarg));
@@ -217,7 +246,7 @@ int main(int argc, const char* argv[]) {
 
   if (argc - optind != 4) {
     printf(
-        "%s [-o LATENCY-OUT-FILENAME] [-n ITERATIONS] [-w WARMUP] [-s "
+        "%s [-o LATENCY-OUT-FILENAME] [-n MAX-ITERATIONS] [-s "
         "SUBSAMPLE-FACTOR] [-p] NUM-ITEMS GET-RATIO ZIPF-THETA "
         "TPUT-LIMIT(M req/sec)\n",
         argv[0]);
@@ -234,8 +263,7 @@ int main(int argc, const char* argv[]) {
   printf("tput_limit=%lf\n", tput_limit);
   printf("tput_limit_mode=%d (%s)\n", tput_limit_mode,
          tput_limit_mode == 0 ? "regular" : "poisson");
-  printf("iterations=%zu\n", iterations);
-  printf("warmup=%zu\n", warmup);
+  printf("max_iterations=%zu\n", max_iterations);
   printf("subsample_factor=%zu\n", subsample_factor);
 
   ::mica::util::lcore.pin_thread(0);
@@ -243,12 +271,13 @@ int main(int argc, const char* argv[]) {
   auto config = ::mica::util::Config::load_file("netbench.json");
 
   latencies = reinterpret_cast<uint64_t*>(
-      mmap(nullptr, iterations * sizeof(*latencies), PROT_READ | PROT_WRITE,
+      mmap(nullptr, max_iterations * sizeof(*latencies), PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0));
   if (!latencies || latencies == MAP_FAILED) {
     perror("Allocating simply gynormous array");
     return 1;
   }
+
   sw.init_start();
   sw.init_end();
 
@@ -279,8 +308,16 @@ int main(int argc, const char* argv[]) {
     args[lcore_id].tput_limit_mode = tput_limit_mode;
     args[lcore_id].tput_limit =
         tput_limit / static_cast<double>(actual_lcore_count);
-    args[lcore_id].iterations = iterations;
+    args[lcore_id].max_iterations = max_iterations;
   }
+
+  iteration_start = 0;
+  stopping = false;
+  std::thread ctrl_thd(controller_proc, nullptr);
+
+  printf("control commands:\n");
+  printf("  r: reset measurement\n");
+  printf("  s: stop measurement\n");
 
   for (uint16_t lcore_id = 1; lcore_id < lcore_count; lcore_id++) {
     if (!rte_lcore_is_enabled(static_cast<uint8_t>(lcore_id))) continue;
@@ -289,13 +326,20 @@ int main(int argc, const char* argv[]) {
   worker_proc(&args[0]);
   rte_eal_mp_wait_lcore();
 
+  ctrl_thd.join();
+
+  uint64_t iteration_start_nv = iteration_start;
+  auto iterations =
+      DatagramClientConfig::ArgumentStruct::get_current_watermark() -
+      iteration_start_nv;
+
   size_t subsample_c = subsample_factor;
   size_t subsample_i = 0;
   ::mica::util::Rand subsample_rand(sw.now() % (uint64_t(1) << 32));
   ::mica::util::Latency lt;
   for (uint64_t each = 0;
        each < iterations / subsample_factor * subsample_factor; ++each) {
-    uint64_t lat = latencies[each];
+    uint64_t lat = latencies[(each + iteration_start_nv) % max_iterations];
     if (subsample_c == subsample_factor) {
       subsample_c = 0;
       subsample_i = each + subsample_rand.next_u32() % subsample_factor;
@@ -303,7 +347,7 @@ int main(int argc, const char* argv[]) {
     if (each == subsample_i)
       fprintf(latency_out_file, "Completed after: %ld us\n", lat);
     subsample_c++;
-    if (each >= warmup) lt.update(lat);
+    lt.update(lat);
   }
   if (latency_out_file != stdout && latency_out_file != stderr)
     fclose(latency_out_file);
@@ -318,7 +362,7 @@ int main(int argc, const char* argv[]) {
   printf("99.9-th: %" PRIu64 " us\n", lt.perc(0.999));
   fflush(stdout);
 
-  munmap(latencies, iterations * sizeof(*latencies));
+  munmap(latencies, max_iterations * sizeof(*latencies));
   network.stop();
 
   return EXIT_SUCCESS;
