@@ -19,3 +19,4 @@ SortIncludes: false
 
 # Requires clang-format v4.0+
 ReflowComments: false
+SortIncludes: false
