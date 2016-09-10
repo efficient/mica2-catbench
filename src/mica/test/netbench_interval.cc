@@ -89,7 +89,7 @@ int worker_proc(void* arg) {
   auto args = reinterpret_cast<Args*>(arg);
 
   Client& client = *args->client;
-  size_t max_iterations = args->max_iterations;
+  // size_t max_iterations = args->max_iterations;
 
   ::mica::util::lcore.pin_thread(args->lcore_id);
 
@@ -361,8 +361,8 @@ int main(int argc, const char* argv[]) {
 
   ctrl_thd.join();
 
-  ::mica::util::Latency lt = lt_arr[lcore_count + 1];
-  lt -= lt_arr[lcore_count];
+  ::mica::util::Latency lt = lt_arr[lcore_count];
+  lt -= lt_arr[lcore_count + 1];
 
   printf("Average: %.2lf us\n", lt.avg_f());
   printf("Minimum: %" PRIu64 " us\n", lt.min());
