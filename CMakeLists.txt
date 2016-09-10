@@ -177,6 +177,9 @@ IF(LTO)
     ADD_EXECUTABLE(netbench src/mica/test/netbench.cc ${SOURCES})
     TARGET_LINK_LIBRARIES(netbench ${LIBRARIES})
 
+    ADD_EXECUTABLE(netbench_interval src/mica/test/netbench_interval.cc ${SOURCES})
+    TARGET_LINK_LIBRARIES(netbench_interval ${LIBRARIES})
+
     IF(SQLITE)
 
       ADD_EXECUTABLE(server_sqlite src/mica/test/server_sqlite.cc ${SOURCES})
@@ -230,6 +233,9 @@ ELSE(LTO)
 
     ADD_EXECUTABLE(netbench src/mica/test/netbench.cc)
     TARGET_LINK_LIBRARIES(netbench common ${LIBRARIES})
+
+    ADD_EXECUTABLE(netbench_interval src/mica/test/netbench_interval.cc)
+    TARGET_LINK_LIBRARIES(netbench_interval common ${LIBRARIES})
 
     IF(SQLITE)
 

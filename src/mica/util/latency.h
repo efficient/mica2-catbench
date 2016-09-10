@@ -41,6 +41,17 @@ class Latency {
     return *this;
   }
 
+  Latency& operator-=(const Latency& o) {
+    uint64_t i;
+    for (i = 0; i < 128; i++) bin0_[i] -= o.bin0_[i];
+    for (i = 0; i < 128; i++) bin1_[i] -= o.bin1_[i];
+    for (i = 0; i < 128; i++) bin2_[i] -= o.bin2_[i];
+    for (i = 0; i < 128; i++) bin3_[i] -= o.bin3_[i];
+    for (i = 0; i < 128; i++) bin4_[i] -= o.bin4_[i];
+    bin5_ -= o.bin5_;
+    return *this;
+  }
+
   uint64_t count() const {
     uint64_t count = 0;
     uint64_t i;
