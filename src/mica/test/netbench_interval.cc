@@ -68,6 +68,7 @@ class ResponseHandler
 
 struct Args {
   size_t actual_lcore_count;
+  size_t lcore_count;
   uint16_t lcore_id;
   ::mica::util::Config* config;
   Alloc* alloc;
@@ -133,7 +134,7 @@ int worker_proc(void* arg) {
 
   uint64_t last_report_time = sw.now() - sw.c_1_sec();
 
-  for (uint64_t seq = 0; seq < max_iterations && !stopping; seq++) {
+  for (uint64_t seq = 0; !stopping; seq++) {
     // Determine the operation type.
     uint32_t op_r = op_type_rand.next_u32();
     bool is_get = op_r <= get_threshold;
@@ -172,24 +173,25 @@ int worker_proc(void* arg) {
     }
 
     if (args->lcore_id == 0 && (seq & 0xffff) == 0 &&
-        sw.diff_in_us(now, last_report_time) >= sw.c_1_sec()) {
+        sw.diff_in_us(now, last_report_time) >= 1000000) {
       last_report_time = now;
 
       ::mica::util::Latency lt;
       // This assumes that lcore IDs are consecutive.
-      for (size_t i = 0; i < args->actual_lcore_count; i++)
+      for (size_t i = 0; i < args->lcore_count; i++)
         lt += args->lt_arr[i];
 
       if (reset_stats) {
         reset_stats = false;
-        args->lt_arr[args->actual_lcore_count] = lt;
-        args->lt_arr[args->actual_lcore_count + 1] = lt;
+        args->lt_arr[args->lcore_count] = lt;
+        args->lt_arr[args->lcore_count + 1] = lt;
       }
 
       ::mica::util::Latency lt_diff = lt;
-      lt_diff -= args->lt_arr[args->actual_lcore_count];
+      lt_diff -= args->lt_arr[args->lcore_count];
 
       printf("Interval:   ");
+      printf("Cnt %9" PRIu64 ", ", lt_diff.count());
       printf("Avg %7.2lf us, ", lt_diff.avg_f());
       printf("Min %4" PRIu64 " us, ", lt_diff.min());
       printf("Max %4" PRIu64 " us, ", lt_diff.max());
@@ -200,9 +202,10 @@ int worker_proc(void* arg) {
       printf("99.9-th: %4" PRIu64 " us\n", lt_diff.perc(0.999));
 
       lt_diff = lt;
-      lt_diff -= args->lt_arr[args->actual_lcore_count + 1];
+      lt_diff -= args->lt_arr[args->lcore_count + 1];
 
       printf("Cumulative: ");
+      printf("Cnt %9" PRIu64 ", ", lt_diff.count());
       printf("Avg %7.2lf us, ", lt_diff.avg_f());
       printf("Min %4" PRIu64 " us, ", lt_diff.min());
       printf("Max %4" PRIu64 " us, ", lt_diff.max());
@@ -212,9 +215,10 @@ int worker_proc(void* arg) {
       printf("99-th: %4" PRIu64 " us, ", lt_diff.perc(0.99));
       printf("99.9-th: %4" PRIu64 " us\n", lt_diff.perc(0.999));
 
+      printf("\n");
       fflush(stdout);
 
-      args->lt_arr[args->actual_lcore_count] = lt;
+      args->lt_arr[args->lcore_count] = lt;
     }
   }
 
@@ -320,11 +324,12 @@ int main(int argc, const char* argv[]) {
       static_cast<uint16_t>(::mica::util::lcore.lcore_count());
   size_t actual_lcore_count = config.get("network").get("lcores").size();
 
-  auto lt_arr = new ::mica::util::Latency[actual_lcore_count + 2];
+  auto lt_arr = new ::mica::util::Latency[lcore_count + 2];
 
   std::vector<Args> args(lcore_count);
   for (uint16_t lcore_id = 0; lcore_id < lcore_count; lcore_id++) {
     args[lcore_id].actual_lcore_count = actual_lcore_count;
+    args[lcore_id].lcore_count = lcore_count;
     args[lcore_id].lcore_id = lcore_id;
     args[lcore_id].config = &config;
     args[lcore_id].alloc = &alloc;
@@ -356,8 +361,8 @@ int main(int argc, const char* argv[]) {
 
   ctrl_thd.join();
 
-  ::mica::util::Latency lt = lt_arr[actual_lcore_count + 1];
-  lt -= lt_arr[actual_lcore_count];
+  ::mica::util::Latency lt = lt_arr[lcore_count + 1];
+  lt -= lt_arr[lcore_count];
 
   printf("Average: %.2lf us\n", lt.avg_f());
   printf("Minimum: %" PRIu64 " us\n", lt.min());
