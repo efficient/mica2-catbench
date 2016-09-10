@@ -356,6 +356,19 @@ int main(int argc, const char* argv[]) {
 
   ctrl_thd.join();
 
+  ::mica::util::Latency lt = lt_arr[actual_lcore_count + 1];
+  lt -= lt_arr[actual_lcore_count];
+
+  printf("Average: %.2lf us\n", lt.avg_f());
+  printf("Minimum: %" PRIu64 " us\n", lt.min());
+  printf("Maximum: %" PRIu64 " us\n", lt.max());
+  printf("50-th: %" PRIu64 " us\n", lt.perc(0.5));
+  printf("90-th: %" PRIu64 " us\n", lt.perc(0.9));
+  printf("95-th: %" PRIu64 " us\n", lt.perc(0.95));
+  printf("99-th: %" PRIu64 " us\n", lt.perc(0.99));
+  printf("99.9-th: %" PRIu64 " us\n", lt.perc(0.999));
+  fflush(stdout);
+
   delete[] lt_arr;
 
   network.stop();
