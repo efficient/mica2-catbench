@@ -205,8 +205,7 @@ void DPDK<StaticConfig>::init_eal(uint64_t core_mask) {
   auto args = config_.get("dpdk_args");
   if (args.exists()) {
     assert(args.is_array());
-    assert(static_cast<size_t>(rte_argc_) + args.size() <=
-           sizeof(rte_argv_) / sizeof(rte_argv_[0]));
+    assert(rte_argc_ + args.size() <= sizeof(rte_argv_) / sizeof(rte_argv_[0]));
     for (size_t i = 0; i < args.size(); i++)
       rte_argv_[rte_argc_++] = strdup(args.get(i).get_str().c_str());
   }
@@ -317,42 +316,6 @@ template <class StaticConfig>
 void DPDK<StaticConfig>::start() {
   assert(!started_);
 
-  rte_eth_conf eth_conf;
-  rte_eth_rxconf eth_rx_conf;
-  rte_eth_txconf eth_tx_conf;
-
-  ::mica::util::memset(&eth_conf, 0, sizeof(eth_conf));
-  ::mica::util::memset(&eth_rx_conf, 0, sizeof(eth_rx_conf));
-  ::mica::util::memset(&eth_tx_conf, 0, sizeof(eth_tx_conf));
-
-  // Force 10 Gbps.
-  // TODO: We may want to allow higher link speeds.
-  //eth_conf.link_speeds = ETH_LINK_SPEED_10G;
-  eth_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
-  eth_conf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
-  eth_conf.rxmode.hw_vlan_filter = 1;
-  eth_conf.rxmode.hw_vlan_strip = 1;
-  eth_conf.txmode.mq_mode = ETH_MQ_TX_NONE;
-  eth_conf.fdir_conf.mode = RTE_FDIR_MODE_PERFECT;
-  eth_conf.fdir_conf.pballoc = RTE_FDIR_PBALLOC_64K;
-  eth_conf.fdir_conf.status = RTE_FDIR_NO_REPORT_STATUS;
-  eth_conf.fdir_conf.mask.dst_port_mask = 0xffff;
-  eth_conf.fdir_conf.drop_queue = 0;
-
-  eth_rx_conf.rx_thresh.pthresh = 8;
-  eth_rx_conf.rx_thresh.hthresh = 0;
-  eth_rx_conf.rx_thresh.wthresh = 0;
-  eth_rx_conf.rx_free_thresh = 0;
-  eth_rx_conf.rx_drop_en = 0;
-
-  eth_tx_conf.tx_thresh.pthresh = 32;
-  eth_tx_conf.tx_thresh.hthresh = 0;
-  eth_tx_conf.tx_thresh.wthresh = 0;
-  eth_tx_conf.tx_free_thresh = 0;
-  eth_tx_conf.tx_rs_thresh = 0;
-  eth_tx_conf.txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOREFCOUNT |
-                           ETH_TXQ_FLAGS_NOMULTMEMP | ETH_TXQ_FLAGS_NOOFFLOADS);
-
   int ret;
 
   for (uint16_t port_id = 0; port_id < ports_.size(); port_id++) {
@@ -366,6 +329,41 @@ void DPDK<StaticConfig>::start() {
 
     if (StaticConfig::kVerbose)
       printf("configuring port %" PRIu16 "...\n", port_id);
+
+    rte_eth_dev_info dev_info;
+    rte_eth_dev_info_get(static_cast<uint8_t>(port_id), &dev_info);
+
+    rte_eth_conf eth_conf;
+    rte_eth_rxconf eth_rx_conf;
+    rte_eth_txconf eth_tx_conf;
+
+    ::mica::util::memset(&eth_conf, 0, sizeof(eth_conf));
+    ::mica::util::memset(&eth_rx_conf, 0, sizeof(eth_rx_conf));
+    ::mica::util::memset(&eth_tx_conf, 0, sizeof(eth_tx_conf));
+
+    // Force 10 Gbps.
+    // TODO: We may want to allow higher link speeds.
+    eth_conf.link_speeds = ETH_LINK_SPEED_10G;
+    eth_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
+    eth_conf.rxmode.max_rx_pkt_len = ETHER_MAX_LEN;
+    eth_conf.rxmode.hw_vlan_filter = 1;
+    eth_conf.rxmode.hw_vlan_strip = 1;
+    eth_conf.txmode.mq_mode = ETH_MQ_TX_NONE;
+    eth_conf.fdir_conf.mode = RTE_FDIR_MODE_PERFECT;
+    eth_conf.fdir_conf.pballoc = RTE_FDIR_PBALLOC_64K;
+    eth_conf.fdir_conf.status = RTE_FDIR_NO_REPORT_STATUS;
+    eth_conf.fdir_conf.mask.dst_port_mask = 0xffff;
+    eth_conf.fdir_conf.drop_queue = 0;
+
+    eth_rx_conf.rx_thresh = dev_info.default_rxconf.rx_thresh;
+    eth_rx_conf.rx_free_thresh = dev_info.default_rxconf.rx_free_thresh;
+    eth_rx_conf.rx_drop_en = dev_info.default_rxconf.rx_drop_en;
+
+    eth_tx_conf.tx_thresh = dev_info.default_txconf.tx_thresh;
+    eth_tx_conf.tx_free_thresh = dev_info.default_txconf.tx_free_thresh;
+    eth_tx_conf.tx_rs_thresh = dev_info.default_txconf.tx_rs_thresh;
+    eth_tx_conf.txq_flags = dev_info.default_txconf.txq_flags |
+                            ETH_TXQ_FLAGS_NOREFCOUNT | ETH_TXQ_FLAGS_NOMULTMEMP;
 
     ret = rte_eth_dev_configure(static_cast<uint8_t>(port_id), queue_count,
                                 queue_count, &eth_conf);
