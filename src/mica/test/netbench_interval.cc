@@ -19,6 +19,7 @@ static ::mica::util::Stopwatch sw;
 static atomic<uint64_t> iteration_start;
 static atomic<bool> reset_stats;
 static atomic<bool> stopping;
+static atomic<uint64_t> delay_until;
 
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
   static constexpr bool kVerbose = true;
@@ -135,6 +136,10 @@ int worker_proc(void* arg) {
   uint64_t last_report_time = sw.now() - sw.c_1_sec();
 
   for (uint64_t seq = 0; !stopping; seq++) {
+    if (delay_until != 0)
+	while (static_cast<int64_t>(delay_until - sw.now()) > 0)
+	   client.handle_response(rh);
+
     // Determine the operation type.
     uint32_t op_r = op_type_rand.next_u32();
     bool is_get = op_r <= get_threshold;
@@ -234,6 +239,8 @@ int controller_proc(void* arg) {
 
     if (strcmp(buf, "r\n") == 0) {
       reset_stats = true;
+    } else if (strcmp(buf, "d\n") == 0) {
+      delay_until = sw.now() + sw.c_1_sec();
     } else if (strcmp(buf, "s\n") == 0) {
       stopping = true;
       break;
@@ -350,6 +357,7 @@ int main(int argc, const char* argv[]) {
 
   printf("control commands:\n");
   printf("  r: reset measurement\n");
+  printf("  d: delay sending requests for 1 second\n");
   printf("  s: stop measurement\n");
 
   for (uint16_t lcore_id = 1; lcore_id < lcore_count; lcore_id++) {
