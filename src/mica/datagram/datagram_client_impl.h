@@ -37,6 +37,9 @@ DatagramClient<StaticConfig>::DatagramClient(const ::mica::util::Config& config,
     thread_state.report_status_check_max = 0xffff;
 
     thread_state.need_to_update_remote_eid = false;
+
+    if (StaticConfig::kRespectApproxQueueLength)
+      thread_state.throttle_state = 0;
   }
 }
 
@@ -341,6 +344,11 @@ void DatagramClient<StaticConfig>::probe_reachability() {
           StaticConfig::kMaxEndpointsPerServer;
       rs.e[partition_id].round_robin = 0;
     }
+
+    if (StaticConfig::kRespectApproxQueueLength) {
+      // rs.last_server_rx_burst_size = 0;
+      rs.server_full_rx_burst_delay = 1.f;
+    }
   }
 
   update_remote_eid();
@@ -455,8 +463,26 @@ bool DatagramClient<StaticConfig>::can_request(uint64_t key_hash) const {
   (void)key_hash;
   size_t lcore_id = ::mica::util::lcore.lcore_id();
   auto& thread_state = thread_states_[lcore_id];
-  return thread_state.outstanding_request_count <
-         StaticConfig::kMaxOutstandingRequestCount;
+  if (!StaticConfig::kRespectApproxQueueLength) {
+    if (thread_state.outstanding_request_count >=
+        StaticConfig::kMaxOutstandingRequestCount)
+      return false;
+    return true;
+  } else {
+    if (thread_state.outstanding_request_count >=
+        StaticConfig::kMaxOutstandingRequestCount)
+      return false;
+
+    auto server_index = calc_server_index(key_hash, servers_.size());
+    auto& request_state = thread_state.request_states[server_index];
+
+    if (++thread_state.throttle_state <
+        static_cast<uint64_t>(request_state.server_full_rx_burst_delay))
+      return false;
+    else
+      thread_state.throttle_state = 0;
+    return true;
+  }
 }
 
 template <class StaticConfig>
@@ -518,6 +544,30 @@ void DatagramClient<StaticConfig>::handle_response(ResponseHandler& rh) {
           auto result = r.get_result();
           rh.handle(rd, result, r.get_value(), r.get_value_length(),
                     thread_state.rd_items[rd].arg);
+
+          if (StaticConfig::kRespectApproxQueueLength) {
+            auto last_server_rx_burst_size =
+                static_cast<uint16_t>(r.get_reserved0());
+
+            // thread_state.rd_items[rd]
+            //     .request_state[0]
+            //     ->last_server_rx_burst_size = last_server_rx_burst_size;
+
+            // XXX: Assume that the server uses kRXBurst that is the same as the client's kRXBurst.
+            auto& server_full_rx_burst_delay = thread_state.rd_items[rd]
+                                                   .request_state[0]
+                                                   ->server_full_rx_burst_delay;
+            // static constexpr auto kSoftThreshold =
+            //     StaticConfig::kRXBurst * 8 / 10;
+            static constexpr auto kHardThreshold = StaticConfig::kRXBurst;
+            // if (last_server_rx_burst_size < kSoftThreshold)
+            if (last_server_rx_burst_size < kHardThreshold)
+              server_full_rx_burst_delay -= 0.001f;
+            else
+              server_full_rx_burst_delay += 0.001f;
+            if (server_full_rx_burst_delay < 1.f)
+              server_full_rx_burst_delay = 1.f;
+          }
 
           release_rd(thread_state, rd);
 
@@ -653,7 +703,7 @@ typename DatagramClient<StaticConfig>::RequestDescriptor
 DatagramClient<StaticConfig>::append_request(
     Operation operation, uint64_t key_hash, const char* key, size_t key_length,
     const char* value, size_t value_length, const Argument& arg) {
-  assert(can_request(key_hash));
+  // assert(can_request(key_hash));
 
   size_t lcore_id = ::mica::util::lcore.lcore_id();
   auto& thread_state = thread_states_[lcore_id];
@@ -711,6 +761,10 @@ DatagramClient<StaticConfig>::append_request(
   // Generate an opaque number.
   uint32_t opaque = (static_cast<uint32_t>(rd) << 16) |
                     static_cast<uint32_t>(thread_state.rd_items[rd].epoch);
+
+  // Set a pointer to track the server endpoint.
+  if (StaticConfig::kRespectApproxQueueLength)
+    thread_state.rd_items[rd].request_state[0] = &request_state;
 
   // Append a request.
   prb->b.append_request(operation, Result::kSuccess, opaque, key_hash, key,

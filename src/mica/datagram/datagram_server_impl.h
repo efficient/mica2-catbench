@@ -202,6 +202,9 @@ void DatagramServer<StaticConfig>::worker_proc(uint16_t lcore_id) {
         network_->receive(rx_tx_state.eid, bufs.data(), StaticConfig::kRXBurst);
     uint64_t now = stopwatch_.now();
 
+    if (StaticConfig::kReportApproxQueueLength)
+      rx_tx_state.last_rx_burst_size = count;
+
     if (count > 0) {
       if (StaticConfig::kVerbose)
         printf("lcore %2zu: received %" PRIu16 " packets\n",
@@ -667,6 +670,10 @@ void DatagramServer<StaticConfig>::RequestAccessor::
   pending_response_batch_.b.set_dest_udp_port(src_r.get_src_udp_port());
 
   pending_response_batch_.b.set_response();
+
+  if (StaticConfig::kReportApproxQueueLength)
+    pending_response_batch_.b.set_reserved0(
+        static_cast<uint32_t>(rx_tx_state_->last_rx_burst_size));
 
   pending_response_batch_.b.finalize();
 

@@ -59,6 +59,9 @@ struct BasicDatagramClientConfig {
   // The TX burst timeout (accumulation time) in microseconds.
   static constexpr uint16_t kTXBurstTimeout = 10;
 
+  // Respect the approximate queue length reported from the server.
+  static constexpr bool kRespectApproxQueueLength = true;
+
   // The probing timeout in microseconds.
   static constexpr uint32_t kProbeTimeout = 30 * 1000 * 1000;
 
@@ -180,6 +183,10 @@ class DatagramClient {
     // The time to trigger a timeout.
     uint64_t expire_time;
 
+    // Valid only when StaticConfig::kRespectApproxQueueLength == true.
+    typename DatagramClient<StaticConfig>::RequestState*
+        request_state[StaticConfig::kRespectApproxQueueLength ? 1 : 0];
+
     // The user argument.
     Argument arg;
   };
@@ -247,6 +254,10 @@ class DatagramClient {
 
     // Pending request state for exclusive access. Indexed by the partition ID.
     std::array<PendingRequestBatch, StaticConfig::kMaxPartitionsPerServer> e;
+
+    // Valid only when StaticConfig::kRespectApproxQueueLength == true.
+    // uint16_t last_server_rx_burst_size;
+    float server_full_rx_burst_delay;
   };
 
   // RX/TX state for an endpoint.
@@ -287,6 +298,9 @@ class DatagramClient {
     uint64_t last_status_report;
     uint32_t report_status_check;
     uint32_t report_status_check_max;
+
+    // Valid only when StaticConfig::kRespectApproxQueueLength == true.
+    mutable uint32_t throttle_state;
 
     volatile bool need_to_update_remote_eid;
   } __attribute__((aligned(128)));

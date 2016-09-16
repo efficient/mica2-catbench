@@ -47,6 +47,9 @@ struct BasicDatagramServerConfig {
   // The TX burst timeout (accumulation time) in microseconds.
   static constexpr uint16_t kTXBurstTimeout = 10;
 
+  // Report the approximate queue length using RequestBatchHeader::reserved0.
+  static constexpr bool kReportApproxQueueLength = true;
+
   // The maximum number of parsed requests.  This must be at least as large as
   // the maximum number of requests per a request batch (packet) AND the
   // maximum number of requests the processor prefetches in advance.  It must
@@ -90,6 +93,9 @@ class DatagramServer {
       uint16_t count;
       uint64_t oldest_time;
     } pending_tx;
+
+    // Valid only when StaticConfig::kReportApproxQueueLength == true.
+    uint16_t last_rx_burst_size;
   };
 
   struct WorkerStats {

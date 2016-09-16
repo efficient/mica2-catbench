@@ -149,6 +149,11 @@ class RequestBatchReader {
     return bh->magic == 0x79;
   }
 
+  uint32_t get_reserved0() const {
+    auto bh = reinterpret_cast<const RequestBatchHeader*>(buf_->get_data());
+    return bh->reserved0;
+  }
+
   bool find_next() {
     if (h_ == nullptr)
       h_ = reinterpret_cast<const RequestHeader*>(buf_->get_data() +
@@ -275,6 +280,11 @@ class RequestBatchBuilder {
   void set_response() {
     auto bh = reinterpret_cast<RequestBatchHeader*>(buf_->get_data());
     bh->magic = 0x79;
+  }
+
+  void set_reserved0(uint32_t v) {
+    auto bh = reinterpret_cast<RequestBatchHeader*>(buf_->get_data());
+    bh->reserved0 = v;
   }
 
   size_t get_count() const { return count_; }
