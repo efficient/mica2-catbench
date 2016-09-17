@@ -60,7 +60,7 @@ struct BasicDatagramClientConfig {
   static constexpr uint16_t kTXBurstTimeout = 10;
 
   // Respect the approximate queue length reported from the server.
-  static constexpr bool kRespectApproxQueueLength = true;
+  static constexpr bool kRespectApproxQueueLength = false;
 
   // The probing timeout in microseconds.
   static constexpr uint32_t kProbeTimeout = 30 * 1000 * 1000;

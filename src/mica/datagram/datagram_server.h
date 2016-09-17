@@ -48,7 +48,7 @@ struct BasicDatagramServerConfig {
   static constexpr uint16_t kTXBurstTimeout = 10;
 
   // Report the approximate queue length using RequestBatchHeader::reserved0.
-  static constexpr bool kReportApproxQueueLength = true;
+  static constexpr bool kReportApproxQueueLength = false;
 
   // The maximum number of parsed requests.  This must be at least as large as
   // the maximum number of requests per a request batch (packet) AND the
