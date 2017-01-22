@@ -95,6 +95,7 @@ IF(DPDK)
   set(LIBRARIES ${LIBRARIES} rte_pmd_i40e rte_pmd_ixgbe rte_pmd_ring)
   set(LIBRARIES ${LIBRARIES} -Wl,--no-whole-archive)
   set(LIBRARIES ${LIBRARIES} rt dl)
+  set(LIBRARIES ${LIBRARIES} grpc++ grpc grpc++_reflection protobuf pthread)
 
 ELSE(DPDK)
 
@@ -127,6 +128,8 @@ SET_SOURCE_FILES_PROPERTIES(src/mica/util/siphash/siphash24.c PROPERTIES LANGUAG
 SET(SOURCES ${SOURCES} src/mica/util/lcore.cc)
 SET(SOURCES ${SOURCES} src/mica/util/stopwatch.cc)
 SET(SOURCES ${SOURCES} src/mica/util/zipf.cc)
+SET(SOURCES ${SOURCES} src/mica/test/helloworld.grpc.pb.cc)
+SET(SOURCES ${SOURCES} src/mica/test/helloworld.pb.cc)
 
 SET(LIBRARIES ${LIBRARIES} rt numa pthread)
 SET(LIBRARIES ${LIBRARIES} curl)
@@ -228,7 +231,7 @@ ELSE(LTO)
     ADD_EXECUTABLE(server src/mica/test/server.cc)
     TARGET_LINK_LIBRARIES(server common ${LIBRARIES})
 
-    ADD_EXECUTABLE(netbench src/mica/test/netbench.cc)
+    ADD_EXECUTABLE(netbench src/mica/test/netbench.cc src/mica/test/helloworld.grpc.pb.h src/mica/test/helloworld.pb.h)
     TARGET_LINK_LIBRARIES(netbench common ${LIBRARIES})
 
     IF(SQLITE)
