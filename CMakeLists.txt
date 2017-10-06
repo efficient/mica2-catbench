@@ -180,6 +180,12 @@ IF(LTO)
     ADD_EXECUTABLE(netbench src/mica/test/netbench.cc ${SOURCES})
     TARGET_LINK_LIBRARIES(netbench ${LIBRARIES})
 
+    ADD_EXECUTABLE(greeter_async_server src/mica/test/greeter_async_server.cc ${SOURCES})
+    TARGET_LINK_LIBRARIES(greeter_async_server ${LIBRARIES})
+
+    ADD_EXECUTABLE(netbench_interval src/mica/test/netbench_interval.cc ${SOURCES})
+    TARGET_LINK_LIBRARIES(netbench_interval ${LIBRARIES})
+
     IF(SQLITE)
 
       ADD_EXECUTABLE(server_sqlite src/mica/test/server_sqlite.cc ${SOURCES})
@@ -233,6 +239,12 @@ ELSE(LTO)
 
     ADD_EXECUTABLE(netbench src/mica/test/netbench.cc src/mica/test/helloworld.grpc.pb.h src/mica/test/helloworld.pb.h)
     TARGET_LINK_LIBRARIES(netbench common ${LIBRARIES})
+
+    ADD_EXECUTABLE(greeter_async_server src/mica/test/greeter_async_server.cc ${SOURCES})
+    TARGET_LINK_LIBRARIES(greeter_async_server ${LIBRARIES})
+
+    ADD_EXECUTABLE(netbench_interval src/mica/test/netbench_interval.cc)
+    TARGET_LINK_LIBRARIES(netbench_interval common ${LIBRARIES})
 
     IF(SQLITE)
 
