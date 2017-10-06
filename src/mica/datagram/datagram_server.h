@@ -45,7 +45,7 @@ struct BasicDatagramServerConfig {
   static constexpr uint16_t kTXMinBurst = 1;
 
   // The TX burst timeout (accumulation time) in microseconds.
-  static constexpr uint16_t kTXBurstTimeout = 10;
+  static constexpr uint16_t kTXBurstTimeout = 1;
 
   // Report the approximate queue length using RequestBatchHeader::reserved0.
   static constexpr bool kReportApproxQueueLength = false;

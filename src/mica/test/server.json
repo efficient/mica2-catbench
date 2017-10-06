@@ -1,14 +1,14 @@
 {
   "dir_client": {
     "etcd_addr": "YOUR_ETCD_HOST",
-    "etcd_port": 50505
+    "etcd_port": 50505,
     /*"verbose": true*/
+	"directory_refresh_lcore": 2
   },
 
   "alloc": {
     /*"num_pages_to_free": [1024, 1024]*/
-    /*"num_pages_to_free": [1024]*/
-    "num_pages_to_free": [2048]
+    "num_pages_to_free": [1024]
     /*"verbose": true*/
   },
   "processor": {
@@ -22,8 +22,8 @@
     "partition_count": 32,*/
     /*"lcores": [0, 2],
     "partition_count": 4,*/
-    "lcores": [0, 1],
-    "partition_count": 2,
+    "lcores": [0],
+    "partition_count": 1,
 
     "total_size": 12884901888,      /* 12 GiB */
     "total_item_count": 201326592,  /* 192 Mi */
@@ -42,7 +42,7 @@
     /*"lcores": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],*/
     /*"lcores": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],*/
     /*"lcores": [0, 2],*/
-    "lcores": [0, 1],
+    "lcores": [0],
 
     "ports": [
       {"port_id": 0, "ipv4_addr": "10.0.0.1"}
@@ -56,8 +56,7 @@
     ],
 
     "endpoints": [
-      [0, 0],
-      [1, 0]
+      [0, 0]
     ],
 
     /*
