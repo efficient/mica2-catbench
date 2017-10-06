@@ -4,6 +4,8 @@
 
 struct DPDKConfig : public ::mica::network::BasicDPDKConfig {
   static constexpr bool kVerbose = true;
+  static constexpr uint16_t kRXDescCount = 256;
+  static constexpr uint16_t kSpareMBufCount = 6144 - kRXDescCount - kTXDescCount;
 };
 
 struct PartitionsConfig : public ::mica::processor::BasicPartitionsConfig {

@@ -44,12 +44,12 @@ struct BasicDPDKConfig {
   // static constexpr uint16_t kMaxBurstSize = 32;
 
   // The number of RX/TX descriptors in each queue.
-  static constexpr uint16_t kRXDescCount = 256;
+  static constexpr uint16_t kRXDescCount = 128;
   static constexpr uint16_t kTXDescCount = 512;
 
   // The number of spare packet buffer count per queue.
   static constexpr uint16_t kSpareMBufCount =
-      6144 - kRXDescCount - kTXDescCount;
+      4096 - kRXDescCount - kTXDescCount;
 
   // The minimum required link speed (Gbps).
   static constexpr uint32_t kMinLinkSpeed = 10;
